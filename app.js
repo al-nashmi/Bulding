@@ -732,7 +732,8 @@ function viewSettings() {
       <p class="meta">${state.txns.length} حركة · ${state.contracts.length} عقد · ${state.files.length} مرفق (${(totalSize / 1048576).toFixed(1)} ميجا)</p>
       <div class="toolbar">
         <button class="btn primary" id="backup">تنزيل نسخة احتياطية كاملة</button>
-        <label class="btn">استرجاع نسخة<input type="file" id="restore" accept=".json,application/json" hidden></label>
+        <label class="btn">استرجاع نسخة (استبدال)<input type="file" id="restore" accept=".json,application/json" hidden></label>
+        <label class="btn">استيراد وإضافة للبيانات الحالية<input type="file" id="importMerge" accept=".json,application/json" hidden></label>
         <button class="btn" id="exportCsv">تصدير الحركات Excel (CSV)</button>
       </div>
       <p class="meta" id="persistStatus"></p>
@@ -759,22 +760,30 @@ async function backup() {
   download(`نسخة-مصاريف-البناء-${today()}.json`, new Blob([JSON.stringify(data)], { type: 'application/json' }));
 }
 
-async function restore(file) {
+async function restore(file, merge = false) {
   let data;
   try { data = JSON.parse(await file.text()); } catch { alert('الملف غير صالح'); return; }
   if (data.app !== 'building-tracker') { alert('هذا ليس ملف نسخة احتياطية من هذا الموقع'); return; }
-  if (!confirm('الاسترجاع سيستبدل كل البيانات الحالية بالنسخة. متابعة؟')) return;
-  for (const s of STORES) await clear(s);
-  urlCache.clear();
-  await put('meta', { ...data.settings, id: 'settings' });
-  for (const s of DATA_STORES) for (const r of data[s] || []) await put(s, r);
+  if (!merge && !confirm('الاسترجاع سيستبدل كل البيانات الحالية بالنسخة. متابعة؟')) return;
+  if (merge) {
+    const cats = [...new Set([...state.settings.categories, ...(data.settings?.categories || [])])];
+    await put('meta', { ...state.settings, categories: cats });
+  } else {
+    for (const s of STORES) await clear(s);
+    urlCache.clear();
+    await put('meta', { ...data.settings, id: 'settings' });
+  }
+  let added = 0;
+  const exists = (s, id) => merge && state[s].some((x) => x.id === id);
+  for (const s of DATA_STORES) for (const r of data[s] || []) if (!exists(s, r.id)) { await put(s, r); added++; }
   for (const f of data.files || []) {
+    if (exists('files', f.id)) continue;
     const { data: d, ...m } = f;
     await put('files', { ...m, blob: await (await fetch(d)).blob() });
   }
   await load();
   render();
-  toast('تم الاسترجاع');
+  toast(merge ? `تمت إضافة ${added} سجل` : 'تم الاسترجاع');
 }
 
 function exportCsv() {
@@ -898,6 +907,7 @@ app.addEventListener('change', (e) => {
     const name = e.target.value.trim();
     if (name) save('accounts', { ...a, name }).then(() => toast('تم الحفظ'));
   } else if (e.target.id === 'restore' && e.target.files[0]) restore(e.target.files[0]);
+  else if (e.target.id === 'importMerge' && e.target.files[0]) restore(e.target.files[0], true);
 });
 
 /* ================= Boot ================= */
