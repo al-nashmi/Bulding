@@ -53,6 +53,7 @@ async function load() {
   }
 }
 async function save(store, rec) {
+  if (store !== 'files') rec = { ...rec, updated: Date.now() };
   await put(store, rec);
   const arr = state[store];
   const i = arr.findIndex((x) => x.id === rec.id);
@@ -774,8 +775,14 @@ async function restore(file, merge = false) {
     await put('meta', { ...data.settings, id: 'settings' });
   }
   let added = 0;
+  let changed = 0;
   const exists = (s, id) => merge && state[s].some((x) => x.id === id);
-  for (const s of DATA_STORES) for (const r of data[s] || []) if (!exists(s, r.id)) { await put(s, r); added++; }
+  for (const s of DATA_STORES) for (const r of data[s] || []) {
+    const cur = merge && state[s].find((x) => x.id === r.id);
+    // An imported record replaces a local one only when it is newer, so local edits are kept.
+    if (!cur) { await put(s, r); added++; }
+    else if ((r.updated || 0) > (cur.updated || 0)) { await put(s, r); changed++; }
+  }
   for (const f of data.files || []) {
     if (exists('files', f.id)) continue;
     const { data: d, ...m } = f;
@@ -783,7 +790,7 @@ async function restore(file, merge = false) {
   }
   await load();
   render();
-  toast(merge ? `تمت إضافة ${added} سجل` : 'تم الاسترجاع');
+  toast(merge ? `تمت إضافة ${added} وتحديث ${changed} سجل` : 'تم الاسترجاع');
 }
 
 function exportCsv() {
