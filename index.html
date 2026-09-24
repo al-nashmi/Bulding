@@ -2,7 +2,8 @@
 <html lang="ar" dir="rtl">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#b45309">
 <title>مصاريف البناء</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -33,6 +34,35 @@
     <button data-add="contract">عقد جديد</button>
     <button data-add="party">مقاول / مورد جديد</button>
     <button data-add="doc">مستند (صك، رخصة، مخطط...)</button>
+  </div>
+</div>
+
+<nav id="bottomNav">
+  <button data-view="dash"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg><span>الرئيسية</span></button>
+  <button data-view="txns"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4v16M7 20l-3-3M7 20l3-3M17 20V4M17 4l-3 3M17 4l3 3"/></svg><span>الحركات</span></button>
+  <button data-sheet="add" class="add"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
+  <button data-view="contracts"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h9l4 4v14H6z"/><path d="M14 3v5h5M9 12h7M9 16h7"/></svg><span>العقود</span></button>
+  <button data-sheet="more" data-more><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg><span>المزيد</span></button>
+</nav>
+
+<div id="sheet" hidden>
+  <div class="sheet-backdrop" data-close></div>
+  <div class="sheet-panel">
+    <div class="sheet-grip"></div>
+    <div id="sheetAdd" class="sheet-list">
+      <button data-add="in"><b>💰</b>استلام مبلغ من الوالد</button>
+      <button data-add="out"><b>🧾</b>دفعة / مصروف</button>
+      <button data-add="transfer"><b>🔁</b>تحويل بين الحسابات (سحب كاش)</button>
+      <button data-add="contract"><b>📝</b>عقد جديد</button>
+      <button data-add="party"><b>👷</b>مقاول / مورد جديد</button>
+      <button data-add="doc"><b>📂</b>مستند (صك، رخصة، مخطط...)</button>
+    </div>
+    <div id="sheetMore" class="sheet-list">
+      <button data-view="parties"><b>👷</b>المقاولين والموردين</button>
+      <button data-view="docs"><b>📂</b>مستندات المبنى</button>
+      <button data-view="files"><b>📎</b>كل المرفقات</button>
+      <button data-view="settings"><b>⚙️</b>الإعدادات والنسخ الاحتياطي</button>
+    </div>
   </div>
 </div>
 

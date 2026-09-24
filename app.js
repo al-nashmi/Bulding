@@ -700,7 +700,8 @@ function exportCsv() {
 
 /* ================= Render & events ================= */
 function render() {
-  document.querySelectorAll('#nav button').forEach((b) => b.classList.toggle('active', b.dataset.view === ui.view));
+  document.querySelectorAll('#nav button, #bottomNav [data-view]').forEach((b) => b.classList.toggle('active', b.dataset.view === ui.view));
+  document.querySelector('#bottomNav [data-more]').classList.toggle('active', MORE_VIEWS.includes(ui.view));
   const views = { dash: viewDash, docs: viewDocs, txns: viewTxns, contracts: viewContracts, parties: viewParties, files: viewFiles, settings: viewSettings };
   app.innerHTML = views[ui.view]();
   if (ui.view === 'settings' && navigator.storage?.persisted) {
@@ -717,6 +718,28 @@ document.getElementById('nav').addEventListener('click', (e) => { const b = e.ta
 
 const fabMenu = document.getElementById('fabMenu');
 document.getElementById('fabBtn').addEventListener('click', () => (fabMenu.hidden = !fabMenu.hidden));
+const MORE_VIEWS = ['parties', 'docs', 'files', 'settings'];
+const sheet = document.getElementById('sheet');
+function openSheet(which) {
+  document.getElementById('sheetAdd').hidden = which !== 'add';
+  document.getElementById('sheetMore').hidden = which !== 'more';
+  sheet.hidden = false;
+}
+const closeSheet = () => (sheet.hidden = true);
+document.getElementById('bottomNav').addEventListener('click', (e) => {
+  const b = e.target.closest('button'); if (!b) return;
+  if (b.dataset.sheet) openSheet(b.dataset.sheet);
+  else if (b.dataset.view === ui.view && !ui.detail) window.scrollTo({ top: 0, behavior: 'smooth' });
+  else go(b.dataset.view);
+});
+sheet.addEventListener('click', (e) => {
+  const b = e.target.closest('[data-add],[data-view],[data-close]'); if (!b) return;
+  closeSheet();
+  if (b.dataset.add) handleAdd(b.dataset.add);
+  else if (b.dataset.view) go(b.dataset.view);
+});
+window.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeSheet(); });
+
 function handleAdd(kind) {
   fabMenu.hidden = true;
   if (kind === 'party') formParty();

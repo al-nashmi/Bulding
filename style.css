@@ -174,3 +174,57 @@ dialog h3 { margin: 0 0 12px; }
   .grid { grid-template-columns: 1fr 1fr; }
   .stat .value { font-size: 18px; }
 }
+
+/* Bottom navigation (mobile) */
+#bottomNav, #sheet { display: none; }
+@media (max-width: 760px) {
+  .top { padding-bottom: 10px; }
+  .brand { margin: 0; }
+  #nav, .fab-wrap { display: none; }
+  main { padding-bottom: calc(96px + env(safe-area-inset-bottom)); }
+  #toast { bottom: calc(80px + env(safe-area-inset-bottom)); }
+
+  #bottomNav {
+    display: grid; grid-template-columns: repeat(5, 1fr);
+    position: fixed; inset: auto 0 0 0; z-index: 30;
+    background: var(--card); border-top: 1px solid var(--line);
+    padding: 6px 4px calc(6px + env(safe-area-inset-bottom));
+  }
+  #bottomNav button {
+    background: none; border: 0; cursor: pointer; color: var(--muted);
+    display: flex; flex-direction: column; align-items: center; gap: 2px;
+    font-size: 11px; padding: 4px 0; -webkit-tap-highlight-color: transparent;
+  }
+  #bottomNav svg {
+    width: 26px; height: 26px; fill: none; stroke: currentColor;
+    stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round;
+  }
+  #bottomNav [data-more] svg { fill: currentColor; stroke: none; }
+  #bottomNav button.active { color: var(--text); }
+  #bottomNav button.active svg { stroke-width: 2.4; }
+  #bottomNav button.active[data-more] svg { transform: scale(1.1); }
+  #bottomNav .add svg {
+    width: 44px; height: 34px; padding: 5px 11px; border-radius: 10px;
+    background: var(--accent); color: #fff; stroke-width: 2.4;
+  }
+
+  #sheet:not([hidden]) { display: block; position: fixed; inset: 0; z-index: 40; }
+  .sheet-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,.4); animation: fade .15s; }
+  .sheet-panel {
+    position: absolute; inset: auto 0 0 0; background: var(--card);
+    border-radius: 18px 18px 0 0; padding: 8px 12px calc(14px + env(safe-area-inset-bottom));
+    animation: up .2s ease-out;
+  }
+  .sheet-grip { width: 40px; height: 4px; border-radius: 4px; background: var(--line); margin: 2px auto 10px; }
+  .sheet-list { display: flex; flex-direction: column; }
+  .sheet-list[hidden] { display: none; }
+  .sheet-list button {
+    display: flex; align-items: center; gap: 12px; text-align: right;
+    background: none; border: 0; border-bottom: 1px solid var(--line);
+    padding: 14px 6px; font-size: 16px; cursor: pointer;
+  }
+  .sheet-list button:last-child { border-bottom: 0; }
+  .sheet-list b { font-size: 20px; width: 28px; text-align: center; font-weight: normal; }
+}
+@keyframes up { from { transform: translateY(100%); } }
+@keyframes fade { from { opacity: 0; } }
