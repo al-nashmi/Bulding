@@ -1,10 +1,15 @@
 'use strict';
 
-/* ================= Storage (IndexedDB) ================= */
+/* ================= Storage =================
+   Inside a Claude artifact the data lives in the artifact's cloud db and files in its
+   asset store, so it is the same on every device. Opened as a plain file or site it
+   falls back to IndexedDB in this browser. */
 const DB_NAME = 'building-tracker';
 const STORES = ['accounts', 'parties', 'contracts', 'txns', 'files', 'docs', 'meta'];
 const DATA_STORES = ['accounts', 'parties', 'contracts', 'txns', 'docs'];
 let db;
+let cloud = null, assets = null, downloads = null;
+const clean = (v) => JSON.parse(JSON.stringify(v));
 
 function openDB() {
   return new Promise((resolve, reject) => {
@@ -24,10 +29,34 @@ function tx(store, mode, fn) {
     t.onerror = () => reject(t.error);
   });
 }
-const getAll = (s) => tx(s, 'readonly', (os) => os.getAll());
-const put = (s, v) => tx(s, 'readwrite', (os) => os.put(v));
-const del = (s, id) => tx(s, 'readwrite', (os) => os.delete(id));
-const clear = (s) => tx(s, 'readwrite', (os) => os.clear());
+async function getAll(s) {
+  if (!cloud) return tx(s, 'readonly', (os) => os.getAll());
+  return (await cloud.collection(s).get()).docs.map((d) => d.data());
+}
+async function put(s, v) {
+  if (!cloud) return tx(s, 'readwrite', (os) => os.put(v));
+  const { blob, ...rest } = v;
+  return cloud.doc(`${s}/${v.id}`).set(clean(rest));
+}
+async function del(s, id) {
+  if (!cloud) return tx(s, 'readwrite', (os) => os.delete(id));
+  return cloud.doc(`${s}/${id}`).delete();
+}
+async function clear(s) {
+  if (!cloud) return tx(s, 'readwrite', (os) => os.clear());
+  for (const d of (await cloud.collection(s).get()).docs) await cloud.doc(`${s}/${d.id}`).delete();
+}
+async function initStorage() {
+  if (window.claude?.use) {
+    cloud = await window.claude.use('db');
+    if (cloud) {
+      assets = await window.claude.use('assets');
+      downloads = await window.claude.use('downloads');
+      return;
+    }
+  }
+  db = await openDB();
+}
 
 /* ================= State ================= */
 const DEFAULT_CATEGORIES = [
@@ -103,6 +132,26 @@ const MILESTONE_SUGGESTIONS = ['دفعة مقدمة', 'بعد الحفر وال�
   'بعد البلوك', 'بعد اللياسة', 'بعد التمديدات', 'بعد التركيب', 'بعد التسليم', 'بعد الاستلام النهائي', 'المحتجز / الضمان'];
 const filesOf = (type, id) => state.files.filter((f) => f.ownerType === type && f.ownerId === id);
 
+const askDlg = document.getElementById('askDlg');
+/* Resolves true/false, or the typed text when `input` is set (null on cancel). */
+function ask(msg, { input = false, ok = 'موافق', cancel = 'إلغاء', danger = false } = {}) {
+  return new Promise((resolve) => {
+    askDlg.innerHTML = `<form method="dialog">
+      <p style="margin:0 0 12px;white-space:pre-wrap">${esc(msg)}</p>
+      ${input ? '<input id="askInput" autocomplete="off">' : ''}
+      <div class="actions"><button class="btn ${danger ? 'danger' : 'primary'}" value="ok">${esc(ok)}</button>
+      ${cancel ? `<button class="btn" value="cancel" formnovalidate>${esc(cancel)}</button>` : ''}</div></form>`;
+    askDlg.onclose = () => {
+      const yes = askDlg.returnValue === 'ok';
+      resolve(input ? (yes ? askDlg.querySelector('#askInput').value.trim() : null) : yes);
+    };
+    askDlg.returnValue = '';
+    askDlg.showModal();
+    askDlg.querySelector(input ? '#askInput' : 'button').focus();
+  });
+}
+const notice = (msg) => ask(msg, { cancel: '' });
+
 function toast(msg) {
   const el = document.getElementById('toast');
   el.textContent = msg; el.hidden = false;
@@ -111,6 +160,7 @@ function toast(msg) {
 
 const urlCache = new Map();
 function fileURL(f) {
+  if (f.assetId) return f.url || '/_blob/' + f.assetId;
   if (!urlCache.has(f.id)) urlCache.set(f.id, URL.createObjectURL(f.blob));
   return urlCache.get(f.id);
 }
@@ -129,20 +179,35 @@ async function prepareFile(file) {
     return new File([blob], file.name.replace(/\.\w+$/, '') + '.jpg', { type: 'image/jpeg' });
   } catch { return file; }
 }
+/* Stores the bytes (asset store in the cloud, IndexedDB locally) and saves the record. */
+async function saveFileRecord(meta, blob) {
+  if (assets) {
+    const up = await assets.upload(blob, { type: meta.type || blob.type || 'application/octet-stream' });
+    return save('files', { ...meta, assetId: up.id, size: up.sizeBytes });
+  }
+  if (cloud) throw new Error('رفع الملفات غير متاح في هذا العرض');
+  return save('files', { ...meta, blob });
+}
+async function removeFile(f) {
+  if (f.assetId) await assets?.delete(f.assetId).catch(() => {});
+  await remove('files', f.id);
+}
+const fileBlob = async (f) => f.blob || (await fetch(fileURL(f))).blob();
+
 async function attachFiles(ownerType, ownerId, fileList) {
   for (const raw of fileList) {
     const f = await prepareFile(raw);
-    await save('files', { id: uid(), ownerType, ownerId, name: f.name, type: f.type, size: f.size, blob: f, created: Date.now() });
+    await saveFileRecord({ id: uid(), ownerType, ownerId, name: f.name, type: f.type, size: f.size, created: Date.now() }, f);
   }
 }
 async function removeFilesOf(ownerType, ownerId) {
-  for (const f of filesOf(ownerType, ownerId)) await remove('files', f.id);
+  for (const f of filesOf(ownerType, ownerId)) await removeFile(f);
 }
 
 function filesHTML(files, removable = false) {
   if (!files.length) return '';
   return `<div class="files">${files.map((f) => `
-    <span class="file">📎 <a href="${fileURL(f)}" target="_blank" rel="noopener">${esc(f.name)}</a>
+    <span class="file">📎 <a href="${fileURL(f)}" target="_blank" rel="noopener" data-view-file="${f.id}">${esc(f.name)}</a>
     ${removable ? `<button type="button" data-rmfile="${f.id}" title="حذف">✕</button>` : ''}</span>`).join('')}</div>`;
 }
 
@@ -198,7 +263,7 @@ function openForm({ title, fields, files, accept = 'image/*,application/pdf', on
     e.preventDefault();
     try {
       if (action === 'delete') {
-        if (!confirm('متأكد من الحذف؟')) return;
+        if (!await ask('متأكد من الحذف؟', { ok: 'حذف', danger: true })) return;
         const ok = await onDelete();
         if (ok === false) return;
       } else {
@@ -206,18 +271,18 @@ function openForm({ title, fields, files, accept = 'image/*,application/pdf', on
         for (const f of fields) {
           const raw = modalForm.elements[f.name].value.trim();
           data[f.name] = f.type === 'number' ? num(raw) : raw;
-          if (f.type === 'number' && f.required && !(data[f.name] > 0)) { alert(`أدخل ${f.label} بشكل صحيح`); return; }
+          if (f.type === 'number' && f.required && !(data[f.name] > 0)) { await notice(`أدخل ${f.label} بشكل صحيح`); return; }
         }
         const ownerRef = await onSave(data);
         if (ownerRef === false) return;
-        for (const id of pendingRemovals) await remove('files', id);
+        for (const id of pendingRemovals) { const f = byId('files', id); if (f) await removeFile(f); }
         const picked = modalForm.elements.__files?.files;
         if (ownerRef && picked?.length) await attachFiles(ownerRef.type, ownerRef.id, picked);
       }
       modal.close();
       render();
       toast('تم الحفظ');
-    } catch (err) { console.error(err); alert('حدث خطأ: ' + err.message); }
+    } catch (err) { console.error(err); notice('حدث خطأ: ' + err.message); }
   };
   modal.showModal();
 }
@@ -287,7 +352,7 @@ function formTxn(type, existing = {}, preset = {}) {
     files: isNew ? [] : filesOf('txn', existing.id),
     onSave: async (d) => {
       if (d.milestoneId && !byId('contracts', d.contractId)?.milestones?.some((m) => m.id === d.milestoneId)) d.milestoneId = '';
-      if (type === 'transfer' && d.from === d.to) { alert('اختر حسابين مختلفين'); return false; }
+      if (type === 'transfer' && d.from === d.to) { await notice('اختر حسابين مختلفين'); return false; }
       const rec = { ...existing, ...d, type, id: existing.id || uid(), created: existing.created || Date.now() };
       await save('txns', rec);
       return { type: 'txn', id: rec.id };
@@ -321,7 +386,7 @@ function formMilestone(contract, existing = {}) {
     },
     onDelete: isNew ? null : async () => {
       const linked = state.txns.filter((t) => t.milestoneId === existing.id);
-      if (linked.length && !confirm(`عليها ${linked.length} دفعة مسجلة. ستبقى الدفعات على العقد لكن بدون ربط بهذه المرحلة. متابعة؟`)) return false;
+      if (linked.length && !await ask(`عليها ${linked.length} دفعة مسجلة. ستبقى الدفعات على العقد لكن بدون ربط بهذه المرحلة. متابعة؟`)) return false;
       for (const t of linked) await save('txns', { ...t, milestoneId: '' });
       await save('contracts', { ...contract, milestones: contract.milestones.filter((m) => m.id !== existing.id) });
     },
@@ -363,7 +428,7 @@ function formParty(existing = {}) {
     onSave: async (d) => { await save('parties', { ...existing, ...d, id: existing.id || uid() }); },
     onDelete: isNew ? null : async () => {
       const used = state.contracts.some((c) => c.partyId === existing.id) || state.txns.some((t) => t.partyId === existing.id);
-      if (used) { alert('لا يمكن الحذف: عليه عقود أو دفعات مسجلة'); return false; }
+      if (used) { await notice('لا يمكن الحذف: عليه عقود أو دفعات مسجلة'); return false; }
       await remove('parties', existing.id);
       ui.detail = null;
     },
@@ -385,14 +450,14 @@ function formContract(existing = {}, preset = {}) {
       { name: 'note', label: 'ملاحظات', type: 'textarea', value: c.note }],
     files: isNew ? [] : filesOf('contract', existing.id),
     onSave: async (d) => {
-      if (!state.parties.length) { alert('أضف المقاول أو المورد أولاً'); return false; }
+      if (!state.parties.length) { await notice('أضف المقاول أو المورد أولاً'); return false; }
       const rec = { additions: [], ...existing, ...d, id: existing.id || uid() };
       await save('contracts', rec);
       if (isNew) { ui.view = 'contracts'; ui.detail = { type: 'contract', id: rec.id }; }
       return { type: 'contract', id: rec.id };
     },
     onDelete: isNew ? null : async () => {
-      if (contractPayments(existing).length) { alert('لا يمكن حذف عقد عليه دفعات. احذف الدفعات أو انقلها أولاً.'); return false; }
+      if (contractPayments(existing).length) { await notice('لا يمكن حذف عقد عليه دفعات. احذف الدفعات أو انقلها أولاً.'); return false; }
       for (const a of existing.additions || []) await removeFilesOf('addition', a.id);
       await removeFilesOf('contract', existing.id);
       await remove('contracts', existing.id);
@@ -699,7 +764,7 @@ function fileOwnerLabel(f) {
 function thumbHTML(f, withOwner = false) {
   const img = f.type?.startsWith('image/');
   const icon = f.type === 'application/pdf' ? '📄' : '📁';
-  return `<a class="thumb" href="${fileURL(f)}" target="_blank" rel="noopener" style="color:inherit;text-decoration:none">
+  return `<a class="thumb" href="${fileURL(f)}" target="_blank" rel="noopener" data-view-file="${f.id}" style="color:inherit;text-decoration:none">
     <div class="img" ${img ? `style="background-image:url('${fileURL(f)}')"` : ''}>${img ? '' : icon}</div>
     <div class="cap">${withOwner ? `<div>${esc(fileOwnerLabel(f))}</div>` : ''}<div class="meta">${esc(f.name)}</div></div></a>`;
 }
@@ -729,7 +794,8 @@ function viewSettings() {
     </div>
     <h2>النسخ الاحتياطي</h2>
     <div class="card">
-      <p style="margin-top:0">البيانات والفواتير محفوظة في هذا المتصفح على هذا الجهاز فقط. خذ نسخة احتياطية بشكل دوري واحفظها في مكان آمن (Google Drive مثلاً) — لو مسحت بيانات المتصفح تضيع.</p>
+      <p style="margin-top:0">${cloud ? 'البيانات والفواتير محفوظة في حسابك على Claude، وتفتحها من أي جهاز بنفس الرابط. خذ نسخة احتياطية بين فترة وفترة للاحتياط.'
+        : 'البيانات والفواتير محفوظة في هذا المتصفح على هذا الجهاز فقط. خذ نسخة احتياطية بشكل دوري واحفظها في مكان آمن (Google Drive مثلاً) — لو مسحت بيانات المتصفح تضيع.'}</p>
       <p class="meta">${state.txns.length} حركة · ${state.contracts.length} عقد · ${state.files.length} مرفق (${(totalSize / 1048576).toFixed(1)} ميجا)</p>
       <div class="toolbar">
         <button class="btn primary" id="backup">تنزيل نسخة احتياطية كاملة</button>
@@ -746,7 +812,12 @@ function viewSettings() {
 /* ================= Backup / Export ================= */
 const blobToDataURL = (b) => new Promise((r) => { const fr = new FileReader(); fr.onload = () => r(fr.result); fr.readAsDataURL(b); });
 
-function download(name, blob) {
+async function download(name, blob) {
+  if (downloads) {
+    try { await downloads.save({ filename: name, data: blob }); } catch (e) { if (e?.code !== 'declined') notice('تعذر حفظ الملف: ' + (e?.message || e)); }
+    return;
+  }
+  if (cloud) { notice('حفظ الملفات غير متاح في هذا العرض'); return; }
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob); a.download = name; a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 5000);
@@ -755,7 +826,7 @@ function download(name, blob) {
 async function backup() {
   toast('جاري تجهيز النسخة...');
   const files = [];
-  for (const f of state.files) { const { blob, ...m } = f; files.push({ ...m, data: await blobToDataURL(blob) }); }
+  for (const f of state.files) { const { blob, url, ...m } = f; files.push({ ...m, data: await blobToDataURL(await fileBlob(f)) }); }
   const data = { app: 'building-tracker', version: 1, exported: new Date().toISOString(),
     settings: state.settings, accounts: state.accounts, parties: state.parties, contracts: state.contracts, txns: state.txns, docs: state.docs, files };
   download(`نسخة-مصاريف-البناء-${today()}.json`, new Blob([JSON.stringify(data)], { type: 'application/json' }));
@@ -763,13 +834,14 @@ async function backup() {
 
 async function restore(file, merge = false) {
   let data;
-  try { data = JSON.parse(await file.text()); } catch { alert('الملف غير صالح'); return; }
-  if (data.app !== 'building-tracker') { alert('هذا ليس ملف نسخة احتياطية من هذا الموقع'); return; }
-  if (!merge && !confirm('الاسترجاع سيستبدل كل البيانات الحالية بالنسخة. متابعة؟')) return;
+  try { data = JSON.parse(await file.text()); } catch { notice('الملف غير صالح'); return; }
+  if (data.app !== 'building-tracker') { notice('هذا ليس ملف نسخة احتياطية من هذا الموقع'); return; }
+  if (!merge && !await ask('الاسترجاع سيستبدل كل البيانات الحالية بالنسخة. متابعة؟', { ok: 'استبدال', danger: true })) return;
   if (merge) {
     const cats = [...new Set([...state.settings.categories, ...(data.settings?.categories || [])])];
     await put('meta', { ...state.settings, categories: cats });
   } else {
+    for (const f of state.files) if (f.assetId) await assets?.delete(f.assetId).catch(() => {});
     for (const s of STORES) await clear(s);
     urlCache.clear();
     await put('meta', { ...data.settings, id: 'settings' });
@@ -786,7 +858,8 @@ async function restore(file, merge = false) {
   for (const f of data.files || []) {
     if (exists('files', f.id)) continue;
     const { data: d, ...m } = f;
-    await put('files', { ...m, blob: await (await fetch(d)).blob() });
+    const { assetId, ...meta } = m;
+    await saveFileRecord(meta, await (await fetch(d)).blob());
   }
   await load();
   render();
@@ -811,7 +884,7 @@ function render() {
   document.querySelector('#bottomNav [data-more]').classList.toggle('active', MORE_VIEWS.includes(ui.view));
   const views = { dash: viewDash, docs: viewDocs, txns: viewTxns, contracts: viewContracts, parties: viewParties, files: viewFiles, settings: viewSettings };
   app.innerHTML = views[ui.view]();
-  if (ui.view === 'settings' && navigator.storage?.persisted) {
+  if (ui.view === 'settings' && !cloud && navigator.storage?.persisted) {
     navigator.storage.persisted().then((p) => {
       const el = document.getElementById('persistStatus');
       if (el) el.textContent = p ? '✓ المتصفح يحمي البيانات من المسح التلقائي' : 'تنبيه: المتصفح لم يمنح تخزيناً دائماً — النسخ الاحتياطي مهم.';
@@ -852,7 +925,7 @@ function handleAdd(kind) {
   if (kind === 'party') formParty();
   else if (kind === 'doc') formDoc();
   else if (kind === 'contract') {
-    if (!state.parties.length) { alert('أضف المقاول أو المورد أولاً'); formParty(); return; }
+    if (!state.parties.length) { toast('أضف المقاول أو المورد أولاً'); formParty(); return; }
     formContract();
   } else formTxn(kind);
 }
@@ -885,18 +958,34 @@ app.addEventListener('click', (e) => {
   else if (el.id === 'exportCsv') exportCsv();
   else if (el.id === 'backup') backup();
   else if (el.id === 'addAccount') {
-    const name = prompt('اسم الحساب'); if (!name) return;
-    save('accounts', { id: uid(), name }).then(render);
+    ask('اسم الحساب الجديد', { input: true, ok: 'إضافة' }).then((name) => name && save('accounts', { id: uid(), name }).then(render));
   } else if (el.id === 'saveSettings') {
     const cats = document.getElementById('cats').value.split('\n').map((x) => x.trim()).filter(Boolean);
     state.settings = { ...state.settings, categories: cats, currency: document.getElementById('currency').value.trim() || 'ر.س' };
     put('meta', state.settings).then(() => { render(); toast('تم الحفظ'); });
   } else if (el.id === 'wipe') {
-    if (!confirm('سيتم مسح كل شيء نهائياً. هل أخذت نسخة احتياطية؟')) return;
-    if (prompt('اكتب: مسح') !== 'مسح') return;
-    Promise.all(STORES.map(clear)).then(() => location.reload());
+    (async () => {
+      if (!await ask('سيتم مسح كل شيء نهائياً. هل أخذت نسخة احتياطية؟', { ok: 'متابعة', danger: true })) return;
+      if (await ask('للتأكيد اكتب: مسح', { input: true, ok: 'مسح نهائي', danger: true }) !== 'مسح') return;
+      for (const f of state.files) if (f.assetId) await assets?.delete(f.assetId).catch(() => {});
+      for (const st of STORES) await clear(st);
+      await load(); render(); toast('تم المسح');
+    })();
   }
 });
+
+/* Images open in an in-page viewer; other files follow their link. */
+document.addEventListener('click', (e) => {
+  const a = e.target.closest('[data-view-file]');
+  if (!a) return;
+  const f = byId('files', a.dataset.viewFile);
+  if (!f || !f.type?.startsWith('image/')) return;
+  e.preventDefault();
+  const v = document.getElementById('viewer');
+  v.innerHTML = `<form method="dialog"><img src="${fileURL(f)}" alt="${esc(f.name)}">
+    <div class="actions"><span class="meta" style="flex:1">${esc(f.name)}</span><button class="btn">إغلاق</button></div></form>`;
+  v.showModal();
+}, true);
 
 app.addEventListener('input', (e) => {
   const f = e.target.dataset.filter;
@@ -920,11 +1009,11 @@ app.addEventListener('change', (e) => {
 /* ================= Boot ================= */
 (async () => {
   try {
-    db = await openDB();
+    await initStorage();
     await load();
-    navigator.storage?.persist?.();
+    if (!cloud) navigator.storage?.persist?.();
     render();
   } catch (err) {
-    app.innerHTML = `<div class="empty">تعذر فتح قاعدة البيانات في هذا المتصفح: ${esc(err.message)}</div>`;
+    app.innerHTML = `<div class="empty">تعذر فتح البيانات: ${esc(err.message || err.code || err)}</div>`;
   }
 })();

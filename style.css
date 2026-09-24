@@ -15,7 +15,8 @@
   --radius: 12px;
 }
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
     --bg: #15171a;
     --card: #1e2125;
     --text: #e8e8e6;
@@ -31,6 +32,22 @@
     --move-soft: #1c2640;
   }
 }
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #15171a;
+  --card: #1e2125;
+  --text: #e8e8e6;
+  --muted: #9aa0a6;
+  --line: #2f3338;
+  --accent: #f59e0b;
+  --accent-soft: #3a2a10;
+  --in: #4ade80;
+  --in-soft: #16301f;
+  --out: #f87171;
+  --out-soft: #3a1b1b;
+  --move: #93b4ff;
+  --move-soft: #1c2640;
+}
 * { box-sizing: border-box; }
 body {
   margin: 0;
@@ -43,7 +60,7 @@ body {
 button, input, select, textarea { font: inherit; color: inherit; }
 
 .top {
-  position: sticky; top: 0; z-index: 10;
+  position: sticky; top: env(safe-area-inset-top, 0px); z-index: 10;
   background: var(--card);
   border-bottom: 1px solid var(--line);
   padding: 10px 16px 0;
@@ -228,3 +245,12 @@ dialog h3 { margin: 0 0 12px; }
 }
 @keyframes up { from { transform: translateY(100%); } }
 @keyframes fade { from { opacity: 0; } }
+
+/* In-page dialogs */
+dialog.ask { width: min(380px, calc(100vw - 32px)); }
+dialog.ask form { padding: 18px; }
+dialog.viewer { width: min(900px, calc(100vw - 16px)); }
+dialog.viewer form { padding: 10px; }
+dialog.viewer img { display: block; width: 100%; max-height: 75vh; object-fit: contain; border-radius: 8px; background: var(--bg); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; } }
