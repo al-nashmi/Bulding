@@ -2,12 +2,13 @@
 
 /* ================= Storage (IndexedDB) ================= */
 const DB_NAME = 'building-tracker';
-const STORES = ['accounts', 'parties', 'contracts', 'txns', 'files', 'meta'];
+const STORES = ['accounts', 'parties', 'contracts', 'txns', 'files', 'docs', 'meta'];
+const DATA_STORES = ['accounts', 'parties', 'contracts', 'txns', 'docs'];
 let db;
 
 function openDB() {
   return new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, 1);
+    const req = indexedDB.open(DB_NAME, 2);
     req.onupgradeneeded = () => {
       for (const s of STORES) if (!req.result.objectStoreNames.contains(s)) req.result.createObjectStore(s, { keyPath: 'id' });
     };
@@ -35,13 +36,13 @@ const DEFAULT_CATEGORIES = [
   'مواد بناء', 'رسوم وتصاريح', 'عمالة', 'نقل', 'أخرى',
 ];
 const state = {
-  accounts: [], parties: [], contracts: [], txns: [], files: [],
+  accounts: [], parties: [], contracts: [], txns: [], files: [], docs: [],
   settings: { id: 'settings', currency: 'ر.س', categories: DEFAULT_CATEGORIES },
 };
 const ui = { view: 'dash', detail: null, filters: {} };
 
 async function load() {
-  for (const s of ['accounts', 'parties', 'contracts', 'txns', 'files']) state[s] = await getAll(s);
+  for (const s of [...DATA_STORES, 'files']) state[s] = await getAll(s);
   const meta = await getAll('meta');
   const settings = meta.find((m) => m.id === 'settings');
   if (settings) state.settings = settings;
@@ -137,7 +138,7 @@ function filesHTML(files, removable = false) {
 const modal = document.getElementById('modal');
 const modalForm = document.getElementById('modalForm');
 
-function openForm({ title, fields, files, onSave, onDelete }) {
+function openForm({ title, fields, files, accept = 'image/*,application/pdf', onSave, onDelete }) {
   const pendingRemovals = new Set();
   const fieldHTML = (f) => {
     const v = f.value ?? '';
@@ -165,7 +166,7 @@ function openForm({ title, fields, files, onSave, onDelete }) {
     <h3>${esc(title)}</h3>
     ${rows.join('')}
     ${files ? `<div class="field"><label>الفواتير والمرفقات (صور أو PDF)</label>
-      <input type="file" name="__files" multiple accept="image/*,application/pdf">
+      <input type="file" name="__files" multiple ${accept ? `accept="${accept}"` : ''}>
       <div id="existingFiles">${filesHTML(files, true)}</div></div>` : ''}
     <div class="actions">
       <button class="btn primary" value="save">حفظ</button>
@@ -336,6 +337,64 @@ function formAddition(contract, existing = {}) {
       await save('contracts', { ...contract, additions: contract.additions.filter((a) => a.id !== existing.id) });
     },
   });
+}
+
+const DOC_TYPES = [
+  'صك الأرض', 'رخصة البناء', 'المخططات المعتمدة', 'المخططات التنفيذية', 'تقرير التربة', 'الرفع المساحي',
+  'شهادة إتمام / إشغال', 'عداد الكهرباء والماء', 'ضمانات', 'عروض أسعار', 'صور الموقع', 'مراسلات', 'أخرى',
+];
+
+function formDoc(existing = {}, preset = {}) {
+  const d = { ...preset, ...existing };
+  const isNew = !existing.id;
+  const kinds = [...new Set([...DOC_TYPES, ...state.docs.map((x) => x.kind)])];
+  openForm({
+    title: isNew ? 'مستند جديد' : 'تعديل المستند',
+    fields: [
+      { name: 'kind', label: 'نوع المستند', type: 'select', options: kinds.map((k) => ({ v: k, t: k })), value: d.kind || DOC_TYPES[0], half: true },
+      { name: 'title', label: 'العنوان', value: d.title, required: true, half: true },
+      { name: 'number', label: 'الرقم (رقم الصك / الرخصة ...)', value: d.number, half: true },
+      { name: 'issuer', label: 'الجهة المصدرة', value: d.issuer, half: true },
+      { name: 'date', label: 'تاريخ الإصدار', type: 'date', value: d.date, half: true },
+      { name: 'expiry', label: 'تاريخ الانتهاء (إن وجد)', type: 'date', value: d.expiry, half: true },
+      { name: 'note', label: 'ملاحظات', type: 'textarea', value: d.note }],
+    files: isNew ? [] : filesOf('doc', existing.id),
+    accept: '',
+    onSave: async (v) => {
+      const rec = { ...existing, ...v, id: existing.id || uid(), created: existing.created || Date.now() };
+      await save('docs', rec);
+      return { type: 'doc', id: rec.id };
+    },
+    onDelete: isNew ? null : async () => { await removeFilesOf('doc', existing.id); await remove('docs', existing.id); },
+  });
+}
+
+function docCard(d) {
+  const files = filesOf('doc', d.id);
+  const days = d.expiry ? Math.ceil((new Date(d.expiry) - new Date(today())) / 86400000) : null;
+  const exp = days === null ? '' : days < 0 ? `<span class="badge out">منتهي</span>`
+    : days <= 60 ? `<span class="badge out">ينتهي بعد ${days} يوم</span>` : `<span class="badge in">ساري حتى ${esc(d.expiry)}</span>`;
+  return `<div class="card doc">
+    <div class="detail-head"><div style="min-width:0">
+      <div class="title" style="font-weight:600">${esc(d.title)} ${exp}</div>
+      <div class="meta">${[d.number && '#' + d.number, d.issuer, d.date].filter(Boolean).map(esc).join(' · ')}</div>
+      ${d.note ? `<div class="meta" style="white-space:pre-wrap">${esc(d.note)}</div>` : ''}</div>
+      <button class="btn sm" data-edit-doc="${d.id}">تعديل / إرفاق</button></div>
+    ${files.length ? `<div class="thumbs" style="margin-top:10px">${files.map((f) => thumbHTML(f)).join('')}</div>` : '<div class="meta">لا توجد ملفات مرفقة</div>'}
+  </div>`;
+}
+
+function viewDocs() {
+  const q = (ui.filters.dq || '').trim();
+  const docs = state.docs.filter((d) => !q || [d.kind, d.title, d.number, d.issuer, d.note].join(' ').includes(q));
+  const groups = {};
+  for (const d of docs) (groups[d.kind] = groups[d.kind] || []).push(d);
+  const order = [...DOC_TYPES, ...Object.keys(groups).filter((k) => !DOC_TYPES.includes(k))].filter((k) => groups[k]);
+  return `<div class="toolbar"><button class="btn primary" data-add="doc">＋ مستند جديد</button>
+      <input data-filter="dq" placeholder="بحث في المستندات..." value="${esc(q)}"></div>
+    ${order.length ? order.map((k) => `<h2>${esc(k)}</h2><div class="list">${groups[k]
+      .sort((a, b) => (b.date || '').localeCompare(a.date || '')).map(docCard).join('')}</div>`).join('')
+      : `<div class="empty">احفظ هنا مستندات المبنى: الصك، الرخصة، المخططات، تقرير التربة، وغيرها.<br>تقدر ترفع أكثر من صورة أو ملف لكل مستند.</div>`}`;
 }
 
 /* ================= Views ================= */
@@ -539,22 +598,26 @@ function fileOwnerLabel(f) {
     const t = byId('txns', f.ownerId);
     return t ? `${TYPE_LABEL[t.type]} ${fmt(t.amount)} · ${t.date}` : '';
   }
+  if (f.ownerType === 'doc') { const d = byId('docs', f.ownerId); return d ? `${d.kind}: ${d.title}` : ''; }
   if (f.ownerType === 'contract') return 'عقد: ' + (byId('contracts', f.ownerId)?.title || '');
   const c = state.contracts.find((c) => c.additions?.some((a) => a.id === f.ownerId));
   return c ? 'زيادة على: ' + c.title : '';
+}
+
+function thumbHTML(f, withOwner = false) {
+  const img = f.type?.startsWith('image/');
+  const icon = f.type === 'application/pdf' ? '📄' : '📁';
+  return `<a class="thumb" href="${fileURL(f)}" target="_blank" rel="noopener" style="color:inherit;text-decoration:none">
+    <div class="img" ${img ? `style="background-image:url('${fileURL(f)}')"` : ''}>${img ? '' : icon}</div>
+    <div class="cap">${withOwner ? `<div>${esc(fileOwnerLabel(f))}</div>` : ''}<div class="meta">${esc(f.name)}</div></div></a>`;
 }
 
 function viewFiles() {
   const q = (ui.filters.fq || '').trim();
   const files = [...state.files].sort((a, b) => b.created - a.created)
     .filter((f) => !q || (f.name + ' ' + fileOwnerLabel(f)).includes(q));
-  return `<div class="toolbar"><input data-filter="fq" placeholder="بحث في الفواتير..." value="${esc(q)}"></div>
-    ${files.length ? `<div class="thumbs">${files.map((f) => {
-      const img = f.type?.startsWith('image/');
-      return `<a class="thumb" href="${fileURL(f)}" target="_blank" rel="noopener" style="color:inherit;text-decoration:none">
-        <div class="img" ${img ? `style="background-image:url('${fileURL(f)}')"` : ''}>${img ? '' : '📄'}</div>
-        <div class="cap"><div>${esc(fileOwnerLabel(f))}</div><div class="meta">${esc(f.name)}</div></div></a>`;
-    }).join('')}</div>` : '<div class="empty">لا توجد فواتير. أرفقها عند تسجيل أي دفعة أو عقد.</div>'}`;
+  return `<div class="toolbar"><input data-filter="fq" placeholder="بحث في المرفقات..." value="${esc(q)}"></div>
+    ${files.length ? `<div class="thumbs">${files.map((f) => thumbHTML(f, true)).join('')}</div>` : '<div class="empty">لا توجد ملفات. أرفقها عند تسجيل أي دفعة أو عقد.</div>'}`;
 }
 
 function viewSettings() {
@@ -601,7 +664,7 @@ async function backup() {
   const files = [];
   for (const f of state.files) { const { blob, ...m } = f; files.push({ ...m, data: await blobToDataURL(blob) }); }
   const data = { app: 'building-tracker', version: 1, exported: new Date().toISOString(),
-    settings: state.settings, accounts: state.accounts, parties: state.parties, contracts: state.contracts, txns: state.txns, files };
+    settings: state.settings, accounts: state.accounts, parties: state.parties, contracts: state.contracts, txns: state.txns, docs: state.docs, files };
   download(`نسخة-مصاريف-البناء-${today()}.json`, new Blob([JSON.stringify(data)], { type: 'application/json' }));
 }
 
@@ -613,7 +676,7 @@ async function restore(file) {
   for (const s of STORES) await clear(s);
   urlCache.clear();
   await put('meta', { ...data.settings, id: 'settings' });
-  for (const s of ['accounts', 'parties', 'contracts', 'txns']) for (const r of data[s] || []) await put(s, r);
+  for (const s of DATA_STORES) for (const r of data[s] || []) await put(s, r);
   for (const f of data.files || []) {
     const { data: d, ...m } = f;
     await put('files', { ...m, blob: await (await fetch(d)).blob() });
@@ -638,7 +701,7 @@ function exportCsv() {
 /* ================= Render & events ================= */
 function render() {
   document.querySelectorAll('#nav button').forEach((b) => b.classList.toggle('active', b.dataset.view === ui.view));
-  const views = { dash: viewDash, txns: viewTxns, contracts: viewContracts, parties: viewParties, files: viewFiles, settings: viewSettings };
+  const views = { dash: viewDash, docs: viewDocs, txns: viewTxns, contracts: viewContracts, parties: viewParties, files: viewFiles, settings: viewSettings };
   app.innerHTML = views[ui.view]();
   if (ui.view === 'settings' && navigator.storage?.persisted) {
     navigator.storage.persisted().then((p) => {
@@ -657,6 +720,7 @@ document.getElementById('fabBtn').addEventListener('click', () => (fabMenu.hidde
 function handleAdd(kind) {
   fabMenu.hidden = true;
   if (kind === 'party') formParty();
+  else if (kind === 'doc') formDoc();
   else if (kind === 'contract') {
     if (!state.parties.length) { alert('أضف المقاول أو المورد أولاً'); formParty(); return; }
     formContract();
@@ -665,7 +729,7 @@ function handleAdd(kind) {
 fabMenu.addEventListener('click', (e) => { const b = e.target.closest('[data-add]'); if (b) handleAdd(b.dataset.add); });
 
 app.addEventListener('click', (e) => {
-  const el = e.target.closest('[data-txn],[data-contract],[data-party],[data-back],[data-pay],[data-addition],[data-edit-contract],[data-edit-addition],[data-add],[data-edit-party],[data-pay-party],[data-add-contract-for],button');
+  const el = e.target.closest('[data-txn],[data-contract],[data-party],[data-back],[data-pay],[data-addition],[data-edit-contract],[data-edit-addition],[data-add],[data-edit-party],[data-pay-party],[data-add-contract-for],[data-edit-doc],button');
   if (!el || e.target.closest('a')) return;
   const d = el.dataset;
   if (d.txn) { const t = byId('txns', d.txn); formTxn(t.type, t); }
@@ -679,6 +743,7 @@ app.addEventListener('click', (e) => {
   else if (d.add) handleAdd(d.add);
   else if (d.editParty) formParty(byId('parties', d.editParty));
   else if (d.payParty) formTxn('out', {}, { partyId: d.payParty });
+  else if (d.editDoc) formDoc(byId('docs', d.editDoc));
   else if (d.addContractFor) formContract({}, { partyId: d.addContractFor });
   else if (el.id === 'clearFilters') { ui.filters = {}; render(); }
   else if (el.id === 'exportCsv') exportCsv();
