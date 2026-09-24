@@ -89,6 +89,17 @@ function balances() {
 const contractTotal = (c) => c.amount + sum(c.additions || [], (a) => a.amount);
 const contractPayments = (c) => state.txns.filter((t) => t.type === 'out' && t.contractId === c.id);
 const contractPaid = (c) => sum(contractPayments(c), (t) => t.amount);
+const milestonePaid = (m) => sum(state.txns.filter((t) => t.type === 'out' && t.milestoneId === m.id), (t) => t.amount);
+const findMilestone = (id) => { for (const c of state.contracts) { const m = c.milestones?.find((x) => x.id === id); if (m) return { c, m }; } return null; };
+function milestoneStatus(m) {
+  const paid = milestonePaid(m), rem = m.amount - paid;
+  if (rem <= 0.009) return { key: 'paid', label: 'مدفوعة', cls: 'in', paid, rem: 0 };
+  if (paid > 0) return { key: 'partial', label: `جزئية — باقي ${fmt(rem)}`, cls: '', paid, rem };
+  if (m.due || (m.dueDate && m.dueDate <= today())) return { key: 'due', label: 'مستحقة', cls: 'out', paid, rem };
+  return { key: 'upcoming', label: 'قادمة', cls: 'transfer', paid, rem };
+}
+const MILESTONE_SUGGESTIONS = ['دفعة مقدمة', 'بعد الحفر والقواعد', 'بعد صب الأسقف', 'بعد صب السقف الأول', 'بعد صب السقف الثاني',
+  'بعد البلوك', 'بعد اللياسة', 'بعد التمديدات', 'بعد التركيب', 'بعد التسليم', 'بعد الاستلام النهائي', 'المحتجز / الضمان'];
 const filesOf = (type, id) => state.files.filter((f) => f.ownerType === type && f.ownerId === id);
 
 function toast(msg) {
@@ -216,6 +227,13 @@ const partyOptions = (withEmpty = true) => [...(withEmpty ? [{ v: '', t: '— ب
 const contractOptions = () => [{ v: '', t: '— بدون عقد (مصروف مباشر) —' },
   ...state.contracts.map((c) => ({ v: c.id, t: `${c.title} — ${partyName(c.partyId)}` }))];
 
+function milestoneOptions(c) {
+  return [{ v: '', t: '— غير محددة —' }, ...(c?.milestones || []).map((m) => {
+    const st = milestoneStatus(m);
+    return { v: m.id, t: `${m.title} (${fmt(m.amount)}${st.key === 'paid' ? ' — مدفوعة' : st.paid ? ' — باقي ' + fmt(st.rem) : ''})` };
+  })];
+}
+
 function formTxn(type, existing = {}, preset = {}) {
   const t = { ...preset, ...existing };
   const isNew = !existing.id;
@@ -244,6 +262,16 @@ function formTxn(type, existing = {}, preset = {}) {
         onChange: (els) => {
           const c = byId('contracts', els.contractId.value);
           if (c) { els.partyId.value = c.partyId || ''; els.category.value = c.category || ''; }
+          els.milestoneId.innerHTML = milestoneOptions(c).map((o) => `<option value="${esc(o.v)}">${esc(o.t)}</option>`).join('');
+          els.milestoneId.closest('.field').hidden = !c?.milestones?.length;
+        } },
+      { name: 'milestoneId', label: 'من أي دفعة في جدول العقد؟', type: 'select', options: milestoneOptions(byId('contracts', t.contractId)), value: t.milestoneId || '',
+        onChange: (els) => {
+          const found = findMilestone(els.milestoneId.value);
+          if (!found) return;
+          const st = milestoneStatus(found.m);
+          if (!num(els.amount.value) && st.rem > 0) els.amount.value = st.rem;
+          if (!els.desc.value) els.desc.value = found.m.title;
         } },
       { name: 'partyId', label: 'المستلم (مقاول/مورد)', type: 'select', options: partyOptions(), value: t.partyId || '', half: true },
       { name: 'category', label: 'البند', type: 'select', options: categoryOptions(), value: t.category || '', half: true },
@@ -257,6 +285,7 @@ function formTxn(type, existing = {}, preset = {}) {
     fields,
     files: isNew ? [] : filesOf('txn', existing.id),
     onSave: async (d) => {
+      if (d.milestoneId && !byId('contracts', d.contractId)?.milestones?.some((m) => m.id === d.milestoneId)) d.milestoneId = '';
       if (type === 'transfer' && d.from === d.to) { alert('اختر حسابين مختلفين'); return false; }
       const rec = { ...existing, ...d, type, id: existing.id || uid(), created: existing.created || Date.now() };
       await save('txns', rec);
@@ -264,6 +293,60 @@ function formTxn(type, existing = {}, preset = {}) {
     },
     onDelete: isNew ? null : async () => { await removeFilesOf('txn', existing.id); await remove('txns', existing.id); },
   });
+  const mf = modalForm.querySelector('[data-field="milestoneId"]');
+  if (mf) mf.hidden = !byId('contracts', t.contractId)?.milestones?.length;
+}
+
+function formMilestone(contract, existing = {}) {
+  const isNew = !existing.id;
+  const scheduled = sum((contract.milestones || []).filter((m) => m.id !== existing.id), (m) => m.amount);
+  const unscheduled = Math.max(0, contractTotal(contract) - scheduled);
+  openForm({
+    title: (isNew ? 'إضافة دفعة للجدول' : 'تعديل الدفعة') + ' — ' + contract.title,
+    fields: [
+      { name: 'title', label: 'اسم الدفعة / المرحلة', value: existing.title, required: true, list: MILESTONE_SUGGESTIONS },
+      { name: 'pct', label: 'النسبة % من العقد (اختياري)', type: 'number', value: existing.pct || '', half: true,
+        onChange: (els) => { const p = num(els.pct.value); if (p > 0) els.amount.value = Math.round(contractTotal(contract) * p) / 100; } },
+      { name: 'amount', label: 'المبلغ', type: 'number', value: existing.amount || (isNew && unscheduled ? unscheduled : ''), required: true, half: true },
+      { name: 'dueDate', label: 'التاريخ المتوقع (اختياري)', type: 'date', value: existing.dueDate, half: true },
+      { name: 'due', label: 'الحالة', type: 'select', options: [{ v: '', t: 'لم تستحق بعد' }, { v: '1', t: 'مستحقة (تم إنجاز المرحلة)' }], value: existing.due ? '1' : '', half: true },
+      { name: 'note', label: 'شرط الاستحقاق / ملاحظات', type: 'textarea', value: existing.note }],
+    onSave: async (d) => {
+      const rec = { ...existing, ...d, due: !!d.due, id: existing.id || uid() };
+      const list = contract.milestones || [];
+      const i = list.findIndex((m) => m.id === rec.id);
+      const milestones = i >= 0 ? list.map((m) => (m.id === rec.id ? rec : m)) : [...list, rec];
+      await save('contracts', { ...contract, milestones });
+    },
+    onDelete: isNew ? null : async () => {
+      const linked = state.txns.filter((t) => t.milestoneId === existing.id);
+      if (linked.length && !confirm(`عليها ${linked.length} دفعة مسجلة. ستبقى الدفعات على العقد لكن بدون ربط بهذه المرحلة. متابعة؟`)) return false;
+      for (const t of linked) await save('txns', { ...t, milestoneId: '' });
+      await save('contracts', { ...contract, milestones: contract.milestones.filter((m) => m.id !== existing.id) });
+    },
+  });
+}
+
+function milestonesHTML(c) {
+  const ms = c.milestones || [];
+  const total = contractTotal(c), scheduled = sum(ms, (m) => m.amount);
+  const diff = total - scheduled;
+  const rows = ms.map((m, i) => {
+    const st = milestoneStatus(m);
+    const pct = m.amount ? Math.min(100, (st.paid / m.amount) * 100) : 0;
+    const nPays = state.txns.filter((t) => t.milestoneId === m.id).length;
+    return `<div class="row" data-edit-milestone="${m.id}"><div class="main">
+        <div class="title">${i + 1}. ${esc(m.title)} <span class="badge ${st.cls}">${esc(st.label)}</span></div>
+        <div class="meta">${[m.dueDate && 'متوقعة ' + m.dueDate, m.note].filter(Boolean).map(esc).join(' · ')}</div>
+        <div class="progress"><div style="width:${pct}%"></div></div>
+        <div class="meta">مدفوع ${fmt(st.paid)} من ${fmt(m.amount)}${nPays ? ` على ${nPays} ${nPays === 1 ? 'دفعة' : 'دفعات'}` : ''}</div></div>
+      ${st.key !== 'paid' ? `<button class="btn sm primary" data-pay-milestone="${m.id}">ادفع</button>` : ''}</div>`;
+  }).join('');
+  return `<div class="detail-head" style="align-items:center"><h2>جدول الدفعات</h2>
+      <button class="btn sm" data-add-milestone="${c.id}" style="margin-top:10px">＋ مرحلة</button></div>
+    ${ms.length ? `<div class="list">${rows}</div>
+      ${Math.abs(diff) > 0.009 ? `<div class="meta" style="margin-top:6px">⚠️ مجموع الجدول ${fmt(scheduled)} و${diff > 0 ? 'باقي غير مجدول ' + fmt(diff) : 'يزيد عن إجمالي العقد بـ ' + fmt(-diff)}</div>` : ''}`
+      : '<div class="meta">قسّم العقد على مراحل: دفعة مقدمة، دفعات حسب الإنجاز، ودفعة بعد التسليم. وتقدر تدفع كل مرحلة على أكثر من جزء.</div>'}`;
 }
 
 function formParty(existing = {}) {
@@ -407,7 +490,8 @@ function txnRow(t) {
   else {
     const c = byId('contracts', t.contractId);
     title = t.desc || c?.title || t.category || 'مصروف';
-    meta = [partyName(t.partyId), c && t.desc ? c.title : '', t.category, `من ${accName(t.from)}`].filter(Boolean).join(' · ');
+    const ms = c?.milestones?.find((m) => m.id === t.milestoneId);
+    meta = [partyName(t.partyId), c && t.desc ? c.title : '', ms && ms.title !== t.desc ? ms.title : '', t.category, `من ${accName(t.from)}`].filter(Boolean).join(' · ');
     sign = '−'; cls = 'neg';
   }
   const nf = filesOf('txn', t.id).length;
@@ -446,6 +530,8 @@ function viewDash() {
   const byCat = {};
   for (const t of state.txns) if (t.type === 'out') byCat[t.category || 'غير مصنف'] = (byCat[t.category || 'غير مصنف'] || 0) + t.amount;
   const cats = Object.entries(byCat).sort((a, b) => b[1] - a[1]);
+  const dueMs = state.contracts.flatMap((c) => (c.milestones || []).map((m) => ({ c, m, st: milestoneStatus(m) })))
+    .filter((x) => x.st.key === 'due' || x.st.key === 'partial');
   const open = state.contracts.filter((c) => contractTotal(c) - contractPaid(c) > 0.009)
     .sort((a, b) => (contractTotal(b) - contractPaid(b)) - (contractTotal(a) - contractPaid(a)));
 
@@ -468,6 +554,10 @@ function viewDash() {
       <tr><th>البند</th><th>المبلغ</th><th>النسبة</th></tr>
       ${cats.map(([c, v]) => `<tr><td>${esc(c)}</td><td>${fmt(v)}</td><td>${spent ? ((v / spent) * 100).toFixed(1) : 0}%</td></tr>`).join('')}
     </table></div>` : ''}
+    ${dueMs.length ? `<h2>دفعات مستحقة (${fmt(sum(dueMs, (x) => x.st.rem))})</h2><div class="list">${dueMs.map(({ c, m, st }) => `
+      <div class="row" data-contract="${c.id}"><div class="main"><div class="title">${esc(m.title)} <span class="badge ${st.cls}">${esc(st.key === 'partial' ? 'جزئية' : 'مستحقة')}</span></div>
+      <div class="meta">${esc(c.title)} · ${esc(partyName(c.partyId))}${m.dueDate ? ' · ' + esc(m.dueDate) : ''}</div></div>
+      <div class="amt neg">${fmt(st.rem)}</div></div>`).join('')}</div>` : ''}
     ${open.length ? `<h2>عقود عليها مبالغ متبقية</h2><div class="list">${open.map(contractRow).join('')}</div>` : ''}
     <h2>آخر الحركات</h2>
     ${state.txns.length ? `<div class="list">${[...state.txns].sort(sortTx).slice(0, 8).map(txnRow).join('')}</div>`
@@ -541,6 +631,7 @@ function viewContractDetail(c) {
     </div>
     ${c.scope ? `<h2>نطاق العمل</h2><div class="card" style="white-space:pre-wrap">${esc(c.scope)}</div>` : ''}
     ${c.note ? `<h2>ملاحظات</h2><div class="card" style="white-space:pre-wrap">${esc(c.note)}</div>` : ''}
+    ${milestonesHTML(c)}
     <h2>مرفقات العقد</h2>
     ${filesHTML(filesOf('contract', c.id)) || '<div class="meta">لا يوجد — أضفها من "تعديل"</div>'}
     <h2>الزيادات والأعمال الإضافية</h2>
@@ -752,7 +843,7 @@ function handleAdd(kind) {
 fabMenu.addEventListener('click', (e) => { const b = e.target.closest('[data-add]'); if (b) handleAdd(b.dataset.add); });
 
 app.addEventListener('click', (e) => {
-  const el = e.target.closest('[data-txn],[data-contract],[data-party],[data-back],[data-pay],[data-addition],[data-edit-contract],[data-edit-addition],[data-add],[data-edit-party],[data-pay-party],[data-add-contract-for],[data-edit-doc],button');
+  const el = e.target.closest('[data-txn],[data-contract],[data-party],[data-back],[data-pay],[data-addition],[data-edit-contract],[data-edit-addition],[data-add],[data-edit-party],[data-pay-party],[data-add-contract-for],[data-edit-doc],[data-add-milestone],[data-edit-milestone],[data-pay-milestone],button');
   if (!el || e.target.closest('a')) return;
   const d = el.dataset;
   if (d.txn) { const t = byId('txns', d.txn); formTxn(t.type, t); }
@@ -766,6 +857,12 @@ app.addEventListener('click', (e) => {
   else if (d.add) handleAdd(d.add);
   else if (d.editParty) formParty(byId('parties', d.editParty));
   else if (d.payParty) formTxn('out', {}, { partyId: d.payParty });
+  else if (d.payMilestone) {
+    const { c, m } = findMilestone(d.payMilestone);
+    formTxn('out', {}, { contractId: c.id, partyId: c.partyId, category: c.category, milestoneId: m.id, amount: milestoneStatus(m).rem, desc: m.title });
+  }
+  else if (d.addMilestone) formMilestone(byId('contracts', d.addMilestone));
+  else if (d.editMilestone) { const { c, m } = findMilestone(d.editMilestone); formMilestone(c, m); }
   else if (d.editDoc) formDoc(byId('docs', d.editDoc));
   else if (d.addContractFor) formContract({}, { partyId: d.addContractFor });
   else if (el.id === 'clearFilters') { ui.filters = {}; render(); }
