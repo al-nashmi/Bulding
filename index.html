@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>مصاريف البناء</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand">🏗️ مصاريف البناء</div>
+  <nav id="nav">
+    <button data-view="dash" class="active">الرئيسية</button>
+    <button data-view="txns">الحركات</button>
+    <button data-view="contracts">العقود</button>
+    <button data-view="parties">المقاولين والموردين</button>
+    <button data-view="files">الفواتير</button>
+    <button data-view="settings">الإعدادات</button>
+  </nav>
+</header>
+
+<main id="app"></main>
+
+<div id="fab" class="fab-wrap">
+  <button class="fab" id="fabBtn" title="إضافة">＋</button>
+  <div class="fab-menu" id="fabMenu" hidden>
+    <button data-add="in">استلام مبلغ من الوالد</button>
+    <button data-add="transfer">تحويل بين الحسابات (سحب كاش)</button>
+    <button data-add="out">دفعة / مصروف</button>
+    <button data-add="contract">عقد جديد</button>
+    <button data-add="party">مقاول / مورد جديد</button>
+  </div>
+</div>
+
+<dialog id="modal"><form method="dialog" id="modalForm"></form></dialog>
+<div id="toast" hidden></div>
+
+<script src="app.js"></script>
+</body>
+</html>
