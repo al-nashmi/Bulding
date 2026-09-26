@@ -254,3 +254,14 @@ dialog.viewer form { padding: 10px; }
 dialog.viewer img { display: block; width: 100%; max-height: 75vh; object-fit: contain; border-radius: 8px; background: var(--bg); }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; } }
+
+/* Material line items */
+.items { display: flex; flex-direction: column; gap: 6px; margin-bottom: 6px; }
+.item-row { display: grid; grid-template-columns: 2fr 1fr 1fr 1.3fr auto; gap: 6px; align-items: center; }
+.item-row input { padding: 7px 8px; }
+[data-field="items"] label[data-total]:not([data-total=""])::after { content: " — " attr(data-total); color: var(--text); font-weight: 600; }
+@media (max-width: 560px) {
+  .item-row { grid-template-columns: 1fr 1fr auto; padding: 8px; border: 1px solid var(--line); border-radius: 8px; }
+  .item-row [data-k="material"] { grid-column: 1 / -1; }
+  .item-row [data-k="total"] { grid-column: 1 / 3; }
+}

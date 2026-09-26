@@ -103,6 +103,10 @@ const sum = (arr, f = (x) => x) => arr.reduce((a, x) => a + (f(x) || 0), 0);
 const byId = (store, id) => state[store].find((x) => x.id === id);
 const accName = (id) => byId('accounts', id)?.name || '—';
 const partyName = (id) => byId('parties', id)?.name || '';
+const MATERIALS = ['اسمنت', 'بلوك / طابوق', 'حديد تسليح', 'خرسانة جاهزة', 'ماء', 'رمل', 'بحص / حصى', 'خشب', 'أسلاك ربط ومسامير', 'مواد عزل', 'مواسير وتمديدات', 'أسلاك كهرباء'];
+const UNITS = ['كيس', 'حبة', 'طن', 'م³', 'وايت', 'نقلة', 'متر', 'لفة', 'كرتون'];
+const fmtQty = (n) => (Math.round(n * 100) / 100).toLocaleString('en-US', { maximumFractionDigits: 2 });
+const itemsText = (items) => (items || []).map((i) => `${i.material}${i.qty ? ' ' + fmtQty(i.qty) + (i.unit ? ' ' + i.unit : '') : ''}`).join('، ');
 const TYPE_LABEL = { in: 'وارد', transfer: 'تحويل', out: 'صرف' };
 const PARTY_TYPES = ['مقاول', 'مورد مواد', 'عامل / فني', 'مكتب هندسي', 'جهة حكومية', 'أخرى'];
 const sortTx = (a, b) => (b.date || '').localeCompare(a.date || '') || (b.created || 0) - (a.created || 0);
@@ -220,6 +224,14 @@ function openForm({ title, fields, files, accept = 'image/*,application/pdf', on
   const fieldHTML = (f) => {
     const v = f.value ?? '';
     let input;
+    if (f.type === 'items') {
+      const mats = [...new Set([...MATERIALS, ...state.txns.flatMap((t) => (t.items || []).map((i) => i.material))])];
+      return `<div class="field" data-field="${f.name}"><label>${esc(f.label)}</label>
+        <div class="items" id="itemsBox">${(f.value || []).map(itemRowHTML).join('')}</div>
+        <button type="button" class="btn sm" data-add-item>＋ مادة</button>
+        <datalist id="materials-list">${mats.map((m) => `<option value="${esc(m)}">`).join('')}</datalist>
+        <datalist id="units-list">${UNITS.map((u) => `<option value="${esc(u)}">`).join('')}</datalist></div>`;
+    }
     if (f.type === 'select') {
       input = `<select name="${f.name}" ${f.required ? 'required' : ''}>${f.options.map((o) =>
         `<option value="${esc(o.v)}" ${String(o.v) === String(v) ? 'selected' : ''}>${esc(o.t)}</option>`).join('')}</select>`;
@@ -254,6 +266,20 @@ function openForm({ title, fields, files, accept = 'image/*,application/pdf', on
   modalForm.querySelectorAll('[data-rmfile]').forEach((b) => b.addEventListener('click', () => {
     pendingRemovals.add(b.dataset.rmfile); b.parentElement.remove();
   }));
+  const itemsBox = modalForm.querySelector('#itemsBox');
+  if (itemsBox) {
+    const syncAmount = () => {
+      const total = sum(readItems(itemsBox), (i) => i.total);
+      itemsBox.closest('.field').querySelector('label').dataset.total = total ? 'المجموع ' + fmt(total) : '';
+      if (total > 0 && modalForm.elements.amount) modalForm.elements.amount.value = Math.round(total * 100) / 100;
+    };
+    modalForm.querySelector('[data-add-item]').addEventListener('click', () => {
+      itemsBox.insertAdjacentHTML('beforeend', itemRowHTML({}));
+      itemsBox.lastElementChild.querySelector('input').focus();
+    });
+    itemsBox.addEventListener('click', (e) => { if (e.target.closest('[data-rm-item]')) { e.target.closest('.item-row').remove(); syncAmount(); } });
+    itemsBox.addEventListener('input', syncAmount);
+  }
   for (const f of fields) if (f.onChange) {
     modalForm.elements[f.name].addEventListener('change', () => f.onChange(modalForm.elements));
   }
@@ -269,6 +295,7 @@ function openForm({ title, fields, files, accept = 'image/*,application/pdf', on
       } else {
         const data = {};
         for (const f of fields) {
+          if (f.type === 'items') { data[f.name] = readItems(itemsBox); continue; }
           const raw = modalForm.elements[f.name].value.trim();
           data[f.name] = f.type === 'number' ? num(raw) : raw;
           if (f.type === 'number' && f.required && !(data[f.name] > 0)) { await notice(`أدخل ${f.label} بشكل صحيح`); return; }
@@ -285,6 +312,21 @@ function openForm({ title, fields, files, accept = 'image/*,application/pdf', on
     } catch (err) { console.error(err); notice('حدث خطأ: ' + err.message); }
   };
   modal.showModal();
+}
+
+function itemRowHTML(i) {
+  return `<div class="item-row">
+    <input data-k="material" list="materials-list" placeholder="المادة" value="${esc(i.material || '')}">
+    <input data-k="qty" inputmode="decimal" placeholder="الكمية" value="${esc(i.qty || '')}">
+    <input data-k="unit" list="units-list" placeholder="الوحدة" value="${esc(i.unit || '')}">
+    <input data-k="total" inputmode="decimal" placeholder="المبلغ" value="${esc(i.total || '')}">
+    <button type="button" class="btn sm" data-rm-item title="حذف">✕</button></div>`;
+}
+function readItems(box) {
+  return [...box.querySelectorAll('.item-row')].map((r) => {
+    const g = (k) => r.querySelector(`[data-k="${k}"]`).value.trim();
+    return { material: g('material'), qty: num(g('qty')), unit: g('unit'), total: num(g('total')) };
+  }).filter((i) => i.material);
 }
 
 const accountOptions = () => state.accounts.map((a) => ({ v: a.id, t: a.name }));
@@ -341,6 +383,7 @@ function formTxn(type, existing = {}, preset = {}) {
         } },
       { name: 'partyId', label: 'المستلم (مقاول/مورد)', type: 'select', options: partyOptions(), value: t.partyId || '', half: true },
       { name: 'category', label: 'البند', type: 'select', options: categoryOptions(), value: t.category || '', half: true },
+      { name: 'items', label: 'تفاصيل المواد (اختياري): المادة، الكمية، الوحدة، ومبلغها شامل الضريبة', type: 'items', value: t.items || [] },
       { name: 'from', label: 'دفعت من', type: 'select', options: accountOptions(), value: t.from || 'bank', half: true },
       { name: 'ref', label: 'رقم الفاتورة / الإيصال', value: t.ref, half: true },
       { name: 'desc', label: 'الوصف', value: t.desc, list: [...new Set(state.txns.map((x) => x.desc).filter(Boolean))].slice(0, 50) },
@@ -351,6 +394,8 @@ function formTxn(type, existing = {}, preset = {}) {
     fields,
     files: isNew ? [] : filesOf('txn', existing.id),
     onSave: async (d) => {
+      if (d.items && !d.items.length) delete d.items;
+      if (d.items && !existing.items && !d.category) d.category = 'مواد بناء';
       if (d.milestoneId && !byId('contracts', d.contractId)?.milestones?.some((m) => m.id === d.milestoneId)) d.milestoneId = '';
       if (type === 'transfer' && d.from === d.to) { await notice('اختر حسابين مختلفين'); return false; }
       const rec = { ...existing, ...d, type, id: existing.id || uid(), created: existing.created || Date.now() };
@@ -557,7 +602,8 @@ function txnRow(t) {
     const c = byId('contracts', t.contractId);
     title = t.desc || c?.title || t.category || 'مصروف';
     const ms = c?.milestones?.find((m) => m.id === t.milestoneId);
-    meta = [partyName(t.partyId), c && t.desc ? c.title : '', ms && ms.title !== t.desc ? ms.title : '', t.category, `من ${accName(t.from)}`].filter(Boolean).join(' · ');
+    if (!t.desc && t.items?.length) title = itemsText(t.items);
+    meta = [partyName(t.partyId), c && t.desc ? c.title : '', ms && ms.title !== t.desc ? ms.title : '', t.desc && t.items?.length ? itemsText(t.items) : '', t.category, `من ${accName(t.from)}`].filter(Boolean).join(' · ');
     sign = '−'; cls = 'neg';
   }
   const nf = filesOf('txn', t.id).length;
@@ -595,6 +641,7 @@ function viewDash() {
 
   const byCat = {};
   for (const t of state.txns) if (t.type === 'out') byCat[t.category || 'غير مصنف'] = (byCat[t.category || 'غير مصنف'] || 0) + t.amount;
+  const mats = materialStats();
   const cats = Object.entries(byCat).sort((a, b) => b[1] - a[1]);
   const dueMs = state.contracts.flatMap((c) => (c.milestones || []).map((m) => ({ c, m, st: milestoneStatus(m) })))
     .filter((x) => x.st.key === 'due' || x.st.key === 'partial');
@@ -616,6 +663,10 @@ function viewDash() {
       ${stat('المتبقي للمقاولين والموردين', fmt(remaining), remaining ? 'neg' : '')}
       ${stat('الرصيد بعد سداد الالتزامات', fmt(balance - remaining), balance - remaining < 0 ? 'neg' : 'pos', balance - remaining < 0 ? 'تحتاج تمويل إضافي' : '')}
     </div>
+    ${mats.length ? `<h2>تكلفة المواد</h2><div class="card table-wrap"><table>
+      <tr><th>المادة</th><th>الكمية</th><th>المبلغ</th></tr>
+      ${mats.slice(0, 8).map((m) => `<tr data-material="${esc(m.name)}" style="cursor:pointer"><td>${esc(m.name)}</td><td>${esc(qtyText(m.qty) || '—')}</td><td>${fmt(m.total)}</td></tr>`).join('')}
+    </table></div>` : ''}
     ${cats.length ? `<h2>الصرف حسب البند</h2><div class="card table-wrap"><table>
       <tr><th>البند</th><th>المبلغ</th><th>النسبة</th></tr>
       ${cats.map(([c, v]) => `<tr><td>${esc(c)}</td><td>${fmt(v)}</td><td>${spent ? ((v / spent) * 100).toFixed(1) : 0}%</td></tr>`).join('')}
@@ -707,6 +758,49 @@ function viewContractDetail(c) {
       <div class="amt">+${fmt(a.amount)}</div></div>`).join('')}</div>` : '<div class="meta">لا توجد زيادات</div>'}
     <h2>الدفعات (${pays.length})</h2>
     ${pays.length ? `<div class="list">${pays.map(txnRow).join('')}</div>` : '<div class="meta">لا توجد دفعات</div>'}`;
+}
+
+function materialStats() {
+  const map = {};
+  for (const t of state.txns) if (t.type === 'out') for (const i of t.items || []) {
+    const m = (map[i.material] = map[i.material] || { name: i.material, total: 0, qty: {}, lines: [] });
+    m.total += i.total;
+    if (i.qty) m.qty[i.unit || ''] = (m.qty[i.unit || ''] || 0) + i.qty;
+    m.lines.push({ ...i, t });
+  }
+  return Object.values(map).sort((a, b) => b.total - a.total);
+}
+const qtyText = (q) => Object.entries(q).map(([u, n]) => `${fmtQty(n)} ${u}`.trim()).join(' + ');
+
+function viewMaterials() {
+  const stats = materialStats();
+  if (ui.detail?.type === 'material') {
+    const m = stats.find((x) => x.name === ui.detail.id);
+    if (m) return `<button class="back" data-back>→ رجوع للمواد</button>
+      <h2 style="margin-top:0">${esc(m.name)}</h2>
+      <div class="grid">${stat('إجمالي التكلفة', fmt(m.total), 'neg')}${stat('الكمية', qtyText(m.qty) || '—')}${stat('عدد المشتريات', m.lines.length)}</div>
+      <h2>المشتريات</h2>
+      <div class="card table-wrap"><table>
+        <tr><th>التاريخ</th><th>المورد</th><th>الكمية</th><th>سعر الوحدة</th><th>المبلغ</th></tr>
+        ${m.lines.sort((a, b) => (b.t.date || '').localeCompare(a.t.date || '')).map((l) => `<tr data-txn="${l.t.id}" style="cursor:pointer">
+          <td>${esc(l.t.date)}</td><td>${esc(partyName(l.t.partyId) || '—')}</td>
+          <td>${l.qty ? fmtQty(l.qty) + ' ' + esc(l.unit || '') : '—'}</td>
+          <td>${l.qty ? fmt(l.total / l.qty) : '—'}</td><td>${fmt(l.total)}</td></tr>`).join('')}
+      </table></div>`;
+    ui.detail = null;
+  }
+  const total = sum(stats, (m) => m.total);
+  return `<div class="toolbar"><button class="btn primary" data-add="out">＋ شراء مواد</button></div>
+    ${stats.length ? `<div class="grid" style="margin-bottom:12px">${stat('إجمالي المواد', fmt(total), 'neg')}${stat('عدد المواد', stats.length)}</div>
+      <div class="list">${stats.map((m) => {
+        const qtys = Object.entries(m.qty);
+        const avg = qtys.length === 1 ? ` · متوسط ${fmt(m.total / qtys[0][1])} / ${esc(qtys[0][0] || 'وحدة')}` : '';
+        return `<div class="row" data-material="${esc(m.name)}"><div class="main"><div class="title">${esc(m.name)}</div>
+          <div class="meta">${esc(qtyText(m.qty) || 'بدون كمية')} · ${m.lines.length} ${m.lines.length === 1 ? 'شراء' : 'مشتريات'}${avg}</div>
+          <div class="progress"><div style="width:${total ? (m.total / total) * 100 : 0}%"></div></div></div>
+          <div class="amt neg">${fmt(m.total)}</div></div>`;
+      }).join('')}</div>`
+      : `<div class="empty">لما تسجل دفعة لمورد، افتح "تفاصيل المواد" واكتب كل مادة بكميتها ومبلغها (اسمنت، بلوك، حديد، ماء...).<br>هنا بيطلع لك كم كلفتك كل مادة وكم كميتها ومتوسط سعرها.</div>`}`;
 }
 
 function viewParties() {
@@ -867,12 +961,12 @@ async function restore(file, merge = false) {
 }
 
 function exportCsv() {
-  const rows = [['التاريخ', 'النوع', 'المبلغ', 'من', 'إلى', 'الجهة', 'العقد', 'البند', 'الوصف', 'المرجع', 'ملاحظات', 'مرفقات']];
+  const rows = [['التاريخ', 'النوع', 'المبلغ', 'من', 'إلى', 'الجهة', 'العقد', 'البند', 'الوصف', 'المرجع', 'ملاحظات', 'المواد', 'مرفقات']];
   for (const t of [...state.txns].sort(sortTx)) {
     rows.push([t.date, TYPE_LABEL[t.type], t.type === 'out' ? -t.amount : t.amount,
       t.type === 'in' ? (t.source || '') : accName(t.from), t.type === 'out' ? '' : accName(t.to),
       partyName(t.partyId), byId('contracts', t.contractId)?.title || '', t.category || '', t.desc || '', t.ref || '', t.note || '',
-      filesOf('txn', t.id).length]);
+      itemsText(t.items), filesOf('txn', t.id).length]);
   }
   const csv = rows.map((r) => r.map((v) => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',')).join('\r\n');
   download(`حركات-البناء-${today()}.csv`, new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' }));
@@ -882,7 +976,7 @@ function exportCsv() {
 function render() {
   document.querySelectorAll('#nav button, #bottomNav [data-view]').forEach((b) => b.classList.toggle('active', b.dataset.view === ui.view));
   document.querySelector('#bottomNav [data-more]').classList.toggle('active', MORE_VIEWS.includes(ui.view));
-  const views = { dash: viewDash, docs: viewDocs, txns: viewTxns, contracts: viewContracts, parties: viewParties, files: viewFiles, settings: viewSettings };
+  const views = { dash: viewDash, materials: viewMaterials, docs: viewDocs, txns: viewTxns, contracts: viewContracts, parties: viewParties, files: viewFiles, settings: viewSettings };
   app.innerHTML = views[ui.view]();
   if (ui.view === 'settings' && !cloud && navigator.storage?.persisted) {
     navigator.storage.persisted().then((p) => {
@@ -898,7 +992,7 @@ document.getElementById('nav').addEventListener('click', (e) => { const b = e.ta
 
 const fabMenu = document.getElementById('fabMenu');
 document.getElementById('fabBtn').addEventListener('click', () => (fabMenu.hidden = !fabMenu.hidden));
-const MORE_VIEWS = ['parties', 'docs', 'files', 'settings'];
+const MORE_VIEWS = ['materials', 'parties', 'docs', 'files', 'settings'];
 const sheet = document.getElementById('sheet');
 function openSheet(which) {
   document.getElementById('sheetAdd').hidden = which !== 'add';
@@ -932,7 +1026,7 @@ function handleAdd(kind) {
 fabMenu.addEventListener('click', (e) => { const b = e.target.closest('[data-add]'); if (b) handleAdd(b.dataset.add); });
 
 app.addEventListener('click', (e) => {
-  const el = e.target.closest('[data-txn],[data-contract],[data-party],[data-back],[data-pay],[data-addition],[data-edit-contract],[data-edit-addition],[data-add],[data-edit-party],[data-pay-party],[data-add-contract-for],[data-edit-doc],[data-add-milestone],[data-edit-milestone],[data-pay-milestone],button');
+  const el = e.target.closest('[data-txn],[data-contract],[data-party],[data-back],[data-pay],[data-addition],[data-edit-contract],[data-edit-addition],[data-add],[data-edit-party],[data-pay-party],[data-add-contract-for],[data-edit-doc],[data-material],[data-add-milestone],[data-edit-milestone],[data-pay-milestone],button');
   if (!el || e.target.closest('a')) return;
   const d = el.dataset;
   if (d.txn) { const t = byId('txns', d.txn); formTxn(t.type, t); }
@@ -953,6 +1047,7 @@ app.addEventListener('click', (e) => {
   else if (d.addMilestone) formMilestone(byId('contracts', d.addMilestone));
   else if (d.editMilestone) { const { c, m } = findMilestone(d.editMilestone); formMilestone(c, m); }
   else if (d.editDoc) formDoc(byId('docs', d.editDoc));
+  else if (d.material) { ui.view = 'materials'; ui.detail = { type: 'material', id: d.material }; render(); window.scrollTo(0, 0); }
   else if (d.addContractFor) formContract({}, { partyId: d.addContractFor });
   else if (el.id === 'clearFilters') { ui.filters = {}; render(); }
   else if (el.id === 'exportCsv') exportCsv();

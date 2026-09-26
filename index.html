@@ -16,6 +16,7 @@
     <button data-view="dash" class="active">الرئيسية</button>
     <button data-view="txns">الحركات</button>
     <button data-view="contracts">العقود</button>
+    <button data-view="materials">المواد</button>
     <button data-view="parties">المقاولين والموردين</button>
     <button data-view="docs">مستندات المبنى</button>
     <button data-view="files">كل المرفقات</button>
@@ -30,7 +31,7 @@
   <div class="fab-menu" id="fabMenu" hidden>
     <button data-add="in">استلام مبلغ من الوالد</button>
     <button data-add="transfer">تحويل بين الحسابات (سحب كاش)</button>
-    <button data-add="out">دفعة / مصروف</button>
+    <button data-add="out">دفعة / مصروف / شراء مواد</button>
     <button data-add="contract">عقد جديد</button>
     <button data-add="party">مقاول / مورد جديد</button>
     <button data-add="doc">مستند (صك، رخصة، مخطط...)</button>
@@ -51,13 +52,14 @@
     <div class="sheet-grip"></div>
     <div id="sheetAdd" class="sheet-list">
       <button data-add="in"><b>💰</b>استلام مبلغ من الوالد</button>
-      <button data-add="out"><b>🧾</b>دفعة / مصروف</button>
+      <button data-add="out"><b>🧾</b>دفعة / مصروف / شراء مواد</button>
       <button data-add="transfer"><b>🔁</b>تحويل بين الحسابات (سحب كاش)</button>
       <button data-add="contract"><b>📝</b>عقد جديد</button>
       <button data-add="party"><b>👷</b>مقاول / مورد جديد</button>
       <button data-add="doc"><b>📂</b>مستند (صك، رخصة، مخطط...)</button>
     </div>
     <div id="sheetMore" class="sheet-list">
+      <button data-view="materials"><b>🧱</b>المواد (اسمنت، بلوك، حديد...)</button>
       <button data-view="parties"><b>👷</b>المقاولين والموردين</button>
       <button data-view="docs"><b>📂</b>مستندات المبنى</button>
       <button data-view="files"><b>📎</b>كل المرفقات</button>
