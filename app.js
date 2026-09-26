@@ -649,6 +649,7 @@ function viewDash() {
     .sort((a, b) => (contractTotal(b) - contractPaid(b)) - (contractTotal(a) - contractPaid(a)));
 
   return `
+    ${aiEntryHTML()}
     <h2>الملخص</h2>
     <div class="grid">
       ${stat('إجمالي المستلم من الوالد', fmt(received), 'pos')}
@@ -976,8 +977,10 @@ function exportCsv() {
 function render() {
   document.querySelectorAll('#nav button, #bottomNav [data-view]').forEach((b) => b.classList.toggle('active', b.dataset.view === ui.view));
   document.querySelector('#bottomNav [data-more]').classList.toggle('active', MORE_VIEWS.includes(ui.view));
-  const views = { dash: viewDash, materials: viewMaterials, docs: viewDocs, txns: viewTxns, contracts: viewContracts, parties: viewParties, files: viewFiles, settings: viewSettings };
+  const views = { ai: viewAssistant, dash: viewDash, materials: viewMaterials, docs: viewDocs, txns: viewTxns, contracts: viewContracts, parties: viewParties, files: viewFiles, settings: viewSettings };
   app.innerHTML = views[ui.view]();
+  document.body.classList.toggle('in-ai', ui.view === 'ai');
+  if (ui.view === 'ai') afterAssistantRender();
   if (ui.view === 'settings' && !cloud && navigator.storage?.persisted) {
     navigator.storage.persisted().then((p) => {
       const el = document.getElementById('persistStatus');
